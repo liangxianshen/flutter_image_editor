@@ -10,9 +10,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  image_editor_platform_interface: ^1.1.0
-  image_editor_common: ^1.2.0
-  image_editor_ohos: ^0.0.9
+  image_editor_common:
+    path: ../image_editor_common
+  image_editor_ohos:
+    path: ../image_editor_ohos
+  image_editor_platform_interface:
+    path: ../image_editor_platform_interface
   # image_editor_common:
   #   path: ../image_editor_common
   # image_editor_platform_interface:

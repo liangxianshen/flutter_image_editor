@@ -1,10 +1,12 @@
 package com.fluttercandies.image_editor.core
 
 import android.graphics.*
+import android.graphics.text.LineBreaker
 import android.os.Build
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.util.Log
 import com.fluttercandies.image_editor.common.font.FontUtils
 import com.fluttercandies.image_editor.option.*
 import com.fluttercandies.image_editor.option.draw.DrawOption
@@ -115,7 +117,19 @@ class ImageHandler(private var bitmap: Bitmap) {
         return newBitmap
     }
 
-    private fun drawText(text: Text, canvas: Canvas) {
+    /*
+    * 有 bug。问题来自于 y 坐标和行高的计算方式不正确 —— 你把 canvas 移动了 (canvas.translate(text.x, text.y))，
+    * 但随后在计算每一行的 y 时又把 text.y 加进去了，导致垂直偏移被重复计算；
+    * 另外你用 (i+1) * fontSizePx 作为行间距也不准确
+    * （忽略了字体的 ascent/descent/leading / StaticLayout 的行间计算），
+    * 并且在左对齐时用 text.x 作为 x 坐标也会重复偏移（因为 canvas 已经平移过 x）。
+
+    * 推荐的、更稳健的做法是让 StaticLayout 负责行间和基线的计算，
+    * 然后把整个 layout 绘制到 canvas 上（用 canvas.save()/translate()/restore()），
+    * 这样不会出错。下面给出了已修正的代码 （仅修改了 drawText/getStaticLayout 的实现）：
+    * */
+
+    /*private fun drawText(text: Text, canvas: Canvas) {
         val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
         textPaint.color = Color.argb(text.a, text.r, text.g, text.b)
         textPaint.textSize = text.fontSizePx.toFloat()
@@ -159,9 +173,9 @@ class ImageHandler(private var bitmap: Bitmap) {
         }
 
         canvas.translate((-text.x).toFloat(), (-text.y).toFloat())
-    }
+    }*/
 
-    @Suppress("DEPRECATION")
+    /*@Suppress("DEPRECATION")
     private fun getStaticLayout(text: Text, textPaint: TextPaint, width: Int): StaticLayout {
         return if (Build.VERSION.SDK_INT >= 23) {
             StaticLayout.Builder.obtain(
@@ -173,6 +187,67 @@ class ImageHandler(private var bitmap: Bitmap) {
                 textPaint,
                 width,
                 Layout.Alignment.ALIGN_NORMAL,
+                1.0F,
+                0.0F,
+                true
+            )
+        }
+    }*/
+
+    /*简要说明为何修复能解决问题：
+    不再在计算每一行时手动加上 text.y（之前导致重复偏移）。改为 canvas.translate(text.x, text.y) 后，
+    把 y 的相对位移交给 StaticLayout 管理。
+    使用 StaticLayout.draw(canvas) 能正确处理基线、行高、换行和对齐（避免自己用 fontSizePx 估算行高产生偏差）。
+    使用 canvas.save()/restore() 比手动 translate(revert) 更安全、语义更清晰。
+    处理了可用宽度为负的情况，避免 StaticLayout 收到负宽度。
+    如果你确实有特殊理由要手动逐行绘制（例如自定义行间距或高亮部分文本），那最小修复是：
+    不要在 lineY 中再加 text.y（因为已经 translate 过了）。
+    用 StaticLayout 提供的行基线或 fontPaint.fontSpacing 来计算行的 y（而不是 (i+1)*fontSizePx）。
+    左对齐时 lineX 应该是 0（因为已经 translate 过 x）。*/
+
+    private fun drawText(text: Text, canvas: Canvas) {
+        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+        textPaint.color = Color.argb(text.a, text.r, text.g, text.b)
+        textPaint.textSize = text.fontSizePx.toFloat()
+
+        // 计算可用宽度（避免负值）
+        val availableWidth = (canvas.width - text.x).coerceAtLeast(0)
+
+        // 将 Paint.Align 转为 Layout.Alignment，交给 StaticLayout 管理对齐
+        val alignment = when (text.textAlign) {
+            Paint.Align.CENTER -> Layout.Alignment.ALIGN_CENTER
+            Paint.Align.RIGHT -> Layout.Alignment.ALIGN_OPPOSITE
+            else -> Layout.Alignment.ALIGN_NORMAL
+        }
+
+        val staticLayout = getStaticLayout(text, textPaint, availableWidth, alignment)
+
+        // 把画布移动到文本区域的左上角，然后由 StaticLayout 负责绘制行和基线
+        canvas.save()
+        canvas.translate(text.x.toFloat(), text.y.toFloat())
+        staticLayout.draw(canvas)
+        canvas.restore()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun getStaticLayout(
+        text: Text,
+        textPaint: TextPaint,
+        width: Int,
+        alignment: Layout.Alignment
+    ): StaticLayout {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            StaticLayout.Builder.obtain(text.text, 0, text.text.length, textPaint, width)
+                .setAlignment(alignment)
+                .setBreakStrategy(LineBreaker.BREAK_STRATEGY_HIGH_QUALITY)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NORMAL)
+                .build()
+        } else {
+            StaticLayout(
+                text.text,
+                textPaint,
+                width,
+                alignment,
                 1.0F,
                 0.0F,
                 true
